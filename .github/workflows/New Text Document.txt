@@ -1,0 +1,64 @@
+name: Unit Test Check
+on: pull_request
+
+jobs:
+  check-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get base branch dynamically
+        run: |
+          echo "BASE_BRANCH=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
+
+      - name: Fetch latest changes
+        run: |
+          git fetch origin $BASE_BRANCH
+
+      - name: Check .cs file changes and apply rules
+        run: |
+          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/$BASE_BRANCH HEAD)
+          ADDED_CS=$(echo "$CHANGED_FILES" | grep -iE '\.cs$' | grep -iE '^(?!.*(x/hdhd|y/hdish)).*' || true)
+          ADDED_TEST_CS=$(echo "$ADDED_CS" | grep -iE 'test.*\.cs$' || true)
+          NON_TEST_ADDED_CS=$(echo "$ADDED_CS" | grep -viE 'test.*\.cs$' || true)
+
+          MODIFIED_CS=$(git diff --name-only --diff-filter=M origin/$BASE_BRANCH HEAD | grep -iE '\.cs$' | grep -iE '^(?!.*(x/hdhd|y/hdish)).*' || true)
+          MODIFIED_TEST_CS=$(echo "$MODIFIED_CS" | grep -iE 'test.*\.cs$' || true)
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          echo "Added .cs files:"
+          echo "$ADDED_CS"
+          echo "Modified .cs files:"
+          echo "$MODIFIED_CS"
+          echo "Added test files:"
+          echo "$ADDED_TEST_CS"
+          echo "Modified test files:"
+          echo "$MODIFIED_TEST_CS"
+
+          # If only whitelisted paths (x/z or y/zz) are changed, skip check
+          ALL_RELEVANT=$(echo "$ADDED_CS$MODIFIED_CS")
+          if [ -z "$ALL_RELEVANT" ]; then
+            echo "✅ Only whitelisted paths or no relevant .cs files were modified. Skipping checks."
+            exit 0
+          fi
+
+          # Rule: If any non-test .cs file was added, but no test was added => error
+          if [ -n "$NON_TEST_ADDED_CS" ] && [ -z "$ADDED_TEST_CS" ]; then
+            echo "❌ Error: New .cs files were added but no test file was added!"
+            echo "$NON_TEST_ADDED_CS"
+            exit 1
+          fi
+
+          # Rule: If 5 or more .cs files were modified, and no test file touched => error
+          MODIFIED_COUNT=$(echo "$MODIFIED_CS" | wc -l)
+          if [ "$MODIFIED_COUNT" -ge 5 ] && [ -z "$MODIFIED_TEST_CS" ] && [ -z "$ADDED_TEST_CS" ]; then
+            echo "❌ Error: More than 5 .cs files were modified without adding or modifying any tests."
+            exit 1
+          fi
+
+          echo "✅ All checks passed."
+        shell: bash

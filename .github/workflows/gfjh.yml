@@ -11,21 +11,25 @@ jobs:
           fetch-depth: 0
 
       - name: Get base branch dynamically
-        run: |
-          echo "BASE_BRANCH=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
+        run: echo "BASE_BRANCH=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
 
       - name: Fetch latest changes
-        run: |
-          git fetch origin $BASE_BRANCH
+        run: git fetch origin $BASE_BRANCH
 
       - name: Check .cs file changes and apply rules
         run: |
-          CHANGED_FILES=$(git diff --name-only --diff-filter=AM origin/$BASE_BRANCH HEAD)
-          ADDED_CS=$(echo "$CHANGED_FILES" | grep -iE '\.cs$' | grep -iE '^(?!.*(x/hdhd|y/hdish)).*' || true)
+          CHANGED_FILES=$(git diff --name-only origin/$BASE_BRANCH...HEAD)
+          
+          # Ignore specific directories
+          IGNORED_PATHS_REGEX='^x/hdhd/|^y/hdish/'
+
+          # Added .cs files (excluding ignored paths)
+          ADDED_CS=$(git diff --name-only --diff-filter=A origin/$BASE_BRANCH...HEAD | grep -iE '\.cs$' | grep -vE "$IGNORED_PATHS_REGEX" || true)
           ADDED_TEST_CS=$(echo "$ADDED_CS" | grep -iE 'test.*\.cs$' || true)
           NON_TEST_ADDED_CS=$(echo "$ADDED_CS" | grep -viE 'test.*\.cs$' || true)
 
-          MODIFIED_CS=$(git diff --name-only --diff-filter=M origin/$BASE_BRANCH HEAD | grep -iE '\.cs$' | grep -iE '^(?!.*(x/hdhd|y/hdish)).*' || true)
+          # Modified .cs files (excluding ignored paths)
+          MODIFIED_CS=$(git diff --name-only --diff-filter=M origin/$BASE_BRANCH...HEAD | grep -iE '\.cs$' | grep -vE "$IGNORED_PATHS_REGEX" || true)
           MODIFIED_TEST_CS=$(echo "$MODIFIED_CS" | grep -iE 'test.*\.cs$' || true)
 
           echo "Changed files:"
@@ -39,26 +43,19 @@ jobs:
           echo "Modified test files:"
           echo "$MODIFIED_TEST_CS"
 
-          # If only whitelisted paths (x/z or y/zz) are changed, skip check
-          ALL_RELEVANT=$(echo "$ADDED_CS$MODIFIED_CS")
-          if [ -z "$ALL_RELEVANT" ]; then
-            echo "✅ Only whitelisted paths or no relevant .cs files were modified. Skipping checks."
+          # Check if there are any .cs changes outside ignored paths
+          if [ -z "$ADDED_CS" ] && [ -z "$MODIFIED_CS" ]; then
+            echo "✅ Only ignored paths changed or no .cs changes. Skipping further checks."
             exit 0
           fi
 
-          # Rule: If any non-test .cs file was added, but no test was added => error
+          # Rule: New .cs files added, but no test file added => error
           if [ -n "$NON_TEST_ADDED_CS" ] && [ -z "$ADDED_TEST_CS" ]; then
-            echo "❌ Error: New .cs files were added but no test file was added!"
+            echo "❌ Error: New non-test .cs files were added without test files:"
             echo "$NON_TEST_ADDED_CS"
             exit 1
           fi
 
-          # Rule: If 5 or more .cs files were modified, and no test file touched => error
-          MODIFIED_COUNT=$(echo "$MODIFIED_CS" | wc -l)
-          if [ "$MODIFIED_COUNT" -ge 5 ] && [ -z "$MODIFIED_TEST_CS" ] && [ -z "$ADDED_TEST_CS" ]; then
-            echo "❌ Error: More than 5 .cs files were modified without adding or modifying any tests."
-            exit 1
-          fi
-
-          echo "✅ All checks passed."
-        shell: bash
+          # Rule: 5+ .cs files modified, and no test changed => error
+          MODIFIED_COUNT=$(echo "$MODIFIED_CS" | grep -c '^' || true)
+          if
